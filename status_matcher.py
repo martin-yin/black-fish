@@ -452,8 +452,8 @@ class StatusMatcher:
                                 print(f"蓝色区域截图已保存: {filename}")
                                 
                                 if self.press_space_key():
-                                    print("等待2.5秒进入按键输入状态...")
-                                    time.sleep(2.5)
+                                    print("等待2.1秒进入按键输入状态...")
+                                    time.sleep(2.1)
                                     self.current_state = "key_input"
                                     print("切换到按键输入模式")
                                     blue_detected = True
