@@ -51,10 +51,10 @@ class StatusMatcher:
                 "height": 22   # 902 - 880
             },
             "key_input": {
-                "left": 1670,
-                "top": 842,
-                "width": 502,  # 2168 - 1675
-                "height": 80   # 916 - 837
+                "left": 1678,
+                "top": 800,
+                "width": 502,
+                "height": 140
             }
         }
         
@@ -147,7 +147,6 @@ class StatusMatcher:
                 
                 img_array = np.array(img)
                 img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                
                 return img_bgr
             
         except Exception as e:
