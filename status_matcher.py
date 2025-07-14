@@ -408,8 +408,8 @@ class StatusMatcher:
                             if detected_status == "find_some_one" and confidence >= 0.95:
                                 print("检测到find_some_one状态，按下空格键进入拉扯状态")
                                 if self.press_space_key():
-                                    print("等待2秒进入拉扯状态...")
-                                    time.sleep(2)
+                                    print("等待1.5秒进入拉扯状态...")
+                                    time.sleep(1.5)
                                     self.current_state = "fishing"
                                     print("切换到拉扯检测模式")
                                     continue
@@ -474,7 +474,7 @@ class StatusMatcher:
                 
                 elif self.current_state == "key_input":
                     # 按键输入模式 - 进行多次尝试
-                    max_attempts = 5  # 最大尝试次数
+                    max_attempts = 2  # 最大尝试次数
                     attempt = 0
                     key_detected = False
                     
@@ -519,8 +519,28 @@ class StatusMatcher:
                     # 按键输入完成后回到监控状态
                     print("按键输入阶段完成，回到状态监控模式")
                     time.sleep(3)  # 等待3秒再继续监控
+                    
+                    # 按下r键之前进行截图
+                    print("按下r键前进行全屏截图...")
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    screenshot_filename = f"./fullscreen/before_r_key_{timestamp}.png"
+                    
+                    # 使用mss进行全屏截图
+                    with mss.mss() as sct:
+                        monitor = sct.monitors[1]  # 主显示器
+                        screenshot = sct.grab(monitor)
+                        # 转换为PIL Image
+                        img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                        # 转换为numpy数组
+                        img_array = np.array(img)
+                        # 转换为BGR格式用于OpenCV保存
+                        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                        # 保存截图
+                        cv2.imwrite(screenshot_filename, img_bgr)
+                        print(f"r键前截图已保存: {screenshot_filename}")
+                    
                     keyboard.press_and_release("r")
-                    time.sleep(1)  # 等待3秒再继续监控
+                    time.sleep(1)  # 等待1秒再继续监控
                     self.current_state = "monitoring"
                 
             except Exception as e:
