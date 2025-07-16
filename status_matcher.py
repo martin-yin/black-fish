@@ -32,6 +32,7 @@ class StatusMatcher:
         self.template_dir = template_dir
         self.templates = self.load_templates()
         self.key_templates = self.load_key_templates()
+        self.discard_fish_templates = self.load_discard_fish_templates()
         
         # 当前状态
         self.current_state = "monitoring"  # monitoring, fishing, key_input
@@ -113,6 +114,29 @@ class StatusMatcher:
                     print(f"已加载按键模板: {filename}, 尺寸: {template.shape}")
                 else:
                     print(f"警告: 无法加载按键模板: {filename}")
+        
+        return templates
+    
+    def load_discard_fish_templates(self) -> Dict[str, np.ndarray]:
+        """
+        加载丢弃鱼类模板
+        """
+        templates = {}
+        discard_dir = "template_images/discard-fish-icon"
+        
+        if not os.path.exists(discard_dir):
+            print(f"警告: 丢弃鱼类模板目录不存在: {discard_dir}")
+            return templates
+        
+        for filename in os.listdir(discard_dir):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                template_path = os.path.join(discard_dir, filename)
+                template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+                if template is not None:
+                    templates[filename] = template
+                    print(f"已加载丢弃鱼类模板: {filename}, 尺寸: {template.shape}")
+                else:
+                    print(f"警告: 无法加载丢弃鱼类模板: {filename}")
         
         return templates
     
@@ -334,6 +358,89 @@ class StatusMatcher:
         
         return filtered
     
+    def get_pixel_color(self, x: int, y: int) -> Tuple[int, int, int]:
+        """
+        获取指定坐标的像素颜色
+        :param x: x坐标
+        :param y: y坐标
+        :return: RGB颜色值元组
+        """
+        try:
+            with mss.mss() as sct:
+                # 截取1x1像素的区域
+                monitor = {
+                    "left": x,
+                    "top": y,
+                    "width": 1,
+                    "height": 1
+                }
+                screenshot = sct.grab(monitor)
+                # 转换为PIL Image
+                img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                # 获取像素颜色
+                pixel_color = img.getpixel((0, 0))
+                return pixel_color
+        except Exception as e:
+            print(f"获取像素颜色失败: {e}")
+            return (0, 0, 0)
+    
+    def capture_specific_region(self, x: int, y: int, width: int, height: int) -> Optional[np.ndarray]:
+        """
+        截取指定坐标和尺寸的区域
+        :param x: 左上角x坐标
+        :param y: 左上角y坐标
+        :param width: 宽度
+        :param height: 高度
+        :return: 截图的numpy数组
+        """
+        try:
+            with mss.mss() as sct:
+                monitor = {
+                    "left": x,
+                    "top": y,
+                    "width": width,
+                    "height": height
+                }
+                
+                screenshot = sct.grab(monitor)
+                img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                img_array = np.array(img)
+                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                return img_bgr
+            
+        except Exception as e:
+            print(f"截取指定区域失败: {e}")
+            return None
+    
+    def detect_discard_fish(self, image: np.ndarray, threshold: float = 0.9) -> bool:
+        """
+        检测图像中是否包含需要丢弃的鱼类图标
+        :param image: 输入图像
+        :param threshold: 匹配阈值
+        :return: 是否检测到需要丢弃的鱼类
+        """
+        if not self.discard_fish_templates:
+            print("警告: 没有加载丢弃鱼类模板")
+            return False
+        
+        best_confidence = 0
+        
+        # 对每个丢弃鱼类模板进行匹配
+        for template_name, template in self.discard_fish_templates.items():
+            matches = self.match_template(image, template, threshold)
+            if matches:
+                confidence = matches[0][2]
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                print(f"模板 {template_name} 匹配置信度: {confidence:.3f}")
+        
+        if best_confidence >= threshold:
+            print(f"检测到需要丢弃的鱼类，最高置信度: {best_confidence:.3f}")
+            return True
+        else:
+            print(f"未检测到需要丢弃的鱼类，最高置信度: {best_confidence:.3f}")
+            return False
+    
     def press_space_key(self):
         """
         按下空格键
@@ -423,7 +530,7 @@ class StatusMatcher:
                             elif detected_status == "waiting":
                                 print("检测到waiting状态，使用较长检测间隔")
                                 # waiting状态使用5秒间隔，跳过默认的interval延迟
-                                time.sleep(3)
+                                time.sleep(2)
                                 continue
                         else:
                             print("未检测到已知状态")
@@ -520,27 +627,32 @@ class StatusMatcher:
                     print("按键输入阶段完成，回到状态监控模式")
                     time.sleep(3)  # 等待3秒再继续监控
                     
-                    # 按下r键之前进行截图
-                    print("按下r键前进行全屏截图...")
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    screenshot_filename = f"./fullscreen/before_r_key_{timestamp}.png"
+                    # 按下r键之前进行区域截图和模板匹配
+                    print("按下r键前进行区域截图和模板匹配...")
                     
-                    # 使用mss进行全屏截图
-                    with mss.mss() as sct:
-                        monitor = sct.monitors[1]  # 主显示器
-                        screenshot = sct.grab(monitor)
-                        # 转换为PIL Image
-                        img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-                        # 转换为numpy数组
-                        img_array = np.array(img)
-                        # 转换为BGR格式用于OpenCV保存
-                        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                        # 保存截图
-                        cv2.imwrite(screenshot_filename, img_bgr)
-                        print(f"r键前截图已保存: {screenshot_filename}")
+                    # 截取指定区域 (x: 2566, y: 1108, width: 52, height: 52)
+                    region_x, region_y, region_width, region_height = 2566, 1108, 52, 52
+                    region_image = self.capture_specific_region(region_x, region_y, region_width, region_height)
                     
-                    keyboard.press_and_release("r")
-                    time.sleep(1)  # 等待1秒再继续监控
+                    if region_image is not None:
+                        # 生成文件名
+                        # 检测是否匹配discard-fish-icon模板
+                        should_discard = self.detect_discard_fish(region_image, threshold=0.85)
+                        if should_discard:
+                            print("检测到需要丢弃的鱼类，不按R键，开始新的循环")
+                        else:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                            screenshot_filename = f"./pos_color/region_{timestamp}.png"
+                            # 保存区域截图
+                            cv2.imwrite(screenshot_filename, region_image)
+                            print(f"区域截图已保存: {screenshot_filename}")
+                            print("未检测到需要丢弃的鱼类, 按下R键")
+                            keyboard.press_and_release("r")
+                            time.sleep(1)
+                    else:
+                        print("区域截图失败，跳过本次检测")
+                    
+                    # 回到监控状态
                     self.current_state = "monitoring"
                 
             except Exception as e:
