@@ -31,8 +31,20 @@ class StatusMatcher:
         """
         self.template_dir = template_dir
         self.templates = self.load_templates()
-        self.key_templates = self.load_key_templates()
+        # self.key_templates = self.load_key_templates()  # 注释掉原来的按键模板加载
         self.discard_fish_templates = self.load_discard_fish_templates()
+        
+        # 加载YOLO模型用于按键检测
+        try:
+            from ultralytics import YOLO
+            self.yolo_model = YOLO("best.pt")
+            print("YOLO模型加载成功")
+        except ImportError:
+            print("错误: ultralytics库未安装，请运行: pip install ultralytics")
+            self.yolo_model = None
+        except Exception as e:
+            print(f"YOLO模型加载失败: {e}")
+            self.yolo_model = None
         
         # 当前状态
         self.current_state = "monitoring"  # monitoring, fishing, key_input
@@ -53,9 +65,9 @@ class StatusMatcher:
             },
             "key_input": {
                 "left": 1678,
-                "top": 800,
+                "top": 790,
                 "width": 502,
-                "height": 140
+                "height": 120
             }
         }
         
@@ -594,21 +606,18 @@ class StatusMatcher:
                         # 截取按键区域
                         key_image = self.capture_region("key_input")
                         if key_image is not None:
-                            key_gray = cv2.cvtColor(key_image, cv2.COLOR_BGR2GRAY)
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                            filename = f"key_area_{timestamp}.png"
+                            cv2.imwrite(f"./pos_color-3/{filename}", key_image)
+                            print(f"按键区域截图已保存: {filename}")
                             
-                            # 第一次尝试时保存截图用于调试
-                            if attempt == 1:
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                                filename = f"key_area_{timestamp}.png"
-                                print(f"按键区域截图已保存: {filename}")
-                            
-                            # 匹配按键模板
-                            matches = self.match_key_templates(key_gray)
+                            # 使用YOLO检测按键
+                            matches = self.detect_keys_with_yolo(key_image, confidence_threshold=0.6)
                             
                             if matches:
                                 print(f"检测到 {len(matches)} 个按键")
                                 for match in matches:
-                                    print(f"  - {match['template']}: 置信度 {match['confidence']:.3f}")
+                                    print(f"  - {match['class_name']}: 置信度 {match['confidence']:.3f}")
                                 
                                 # 输入按键序列
                                 self.input_key_sequence(matches)
@@ -622,6 +631,13 @@ class StatusMatcher:
                     
                     if not key_detected:
                         print(f"经过 {max_attempts} 次尝试仍未检测到按键")
+                        # 保存key_input区域截图用于调试
+                        key_image = self.capture_region("key_input")
+                        if key_image is not None:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                            key_debug_filename = f"./pos_color/key_input_failed_{timestamp}.png"
+                            cv2.imwrite(key_debug_filename, key_image)
+                            print(f"按键检测失败时的key_input截图已保存: {key_debug_filename}")
                     
                     # 按键输入完成后回到监控状态
                     print("按键输入阶段完成，回到状态监控模式")
@@ -740,6 +756,68 @@ class StatusMatcher:
         else:
             self.start_monitoring()
 
+    def detect_keys_with_yolo(self, image: np.ndarray, confidence_threshold: float = 0.5) -> List[Dict]:
+        """
+        使用YOLO模型检测按键
+        :param image: 输入图像
+        :param confidence_threshold: 置信度阈值
+        :return: 检测结果列表
+        """
+        if self.yolo_model is None:
+            print("YOLO模型未加载，无法进行按键检测")
+            return []
+        
+        try:
+            # 使用YOLO模型进行推理
+            results = self.yolo_model(image)
+            
+            detection_data = []
+            
+            for result in results:
+                boxes = result.boxes
+                
+                if boxes is not None and len(boxes) > 0:
+                    for i in range(len(boxes)):
+                        # 获取边界框坐标 (x1, y1, x2, y2)
+                        x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+                        
+                        # 计算中心点坐标
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        
+                        # 获取置信度
+                        confidence = float(boxes.conf[i].cpu().numpy())
+                        
+                        # 获取类别ID和名称
+                        class_id = int(boxes.cls[i].cpu().numpy())
+                        class_name = self.yolo_model.names[class_id]  # 对应 A, D, S, W
+                        
+                        # 只保留置信度高于阈值的检测结果
+                        if confidence >= confidence_threshold:
+                            detection_info = {
+                                'bbox': [float(x1), float(y1), float(x2), float(y2)],
+                                'center_x': float(center_x),
+                                'center_y': float(center_y),
+                                'confidence': confidence,
+                                'class_id': class_id,
+                                'class_name': class_name,
+                                'template': f"{class_name}.png"  # 为了兼容原有的input_key_sequence方法
+                            }
+                            detection_data.append(detection_info)
+            
+            # 按x轴坐标（center_x）从小到大排序
+            detection_data_sorted = sorted(detection_data, key=lambda x: x['center_x'])
+            
+            print(f"YOLO检测到 {len(detection_data_sorted)} 个按键目标")
+            for detection in detection_data_sorted:
+                print(f"  - {detection['class_name']}: 置信度 {detection['confidence']:.3f}, 位置 ({detection['center_x']:.1f}, {detection['center_y']:.1f})")
+            
+            return detection_data_sorted
+            
+        except Exception as e:
+            print(f"YOLO按键检测失败: {e}")
+            return []
+
 
 def main():
     # 创建状态匹配器
@@ -829,7 +907,6 @@ def main():
         
         else:
             print("无效选择，请重新输入")
-
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+labels/
+pos_color/
+pos_color-2/
+pos_color-3/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
