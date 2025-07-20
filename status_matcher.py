@@ -34,6 +34,29 @@ class StatusMatcher:
         # self.key_templates = self.load_key_templates()  # 注释掉原来的按键模板加载
         self.discard_fish_templates = self.load_discard_fish_templates()
         
+        # 加载ONNX模型用于按键检测
+        try:
+            import onnxruntime as ort
+            self.onnx_session = ort.InferenceSession("best.onnx")
+            self.input_name = self.onnx_session.get_inputs()[0].name
+            self.output_names = [output.name for output in self.onnx_session.get_outputs()]
+            
+            # 获取输入尺寸
+            input_shape = self.onnx_session.get_inputs()[0].shape
+            self.input_height = input_shape[2] if len(input_shape) > 2 else 640
+            self.input_width = input_shape[3] if len(input_shape) > 3 else 640
+            
+            # 类别名称映射（根据你的模型调整）
+            self.class_names = {0: 'A', 1: 'D', 2: 'S', 3: 'W'}  # 根据实际情况调整
+            
+            print(f"ONNX模型加载成功，输入尺寸: {self.input_height}x{self.input_width}")
+        except ImportError:
+            print("错误: onnxruntime库未安装，请运行: pip install onnxruntime")
+            self.onnx_session = None
+        except Exception as e:
+            print(f"ONNX模型加载失败: {e}")
+            self.onnx_session = None
+        
         # 加载YOLO模型用于按键检测
         try:
             from ultralytics import YOLO
@@ -907,6 +930,112 @@ def main():
         
         else:
             print("无效选择，请重新输入")
+
+
+    def preprocess_image_for_onnx(self, image: np.ndarray) -> np.ndarray:
+        """
+        为ONNX模型预处理图像
+        :param image: 输入图像 (BGR格式)
+        :return: 预处理后的图像数组
+        """
+        # 转换为RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # 调整尺寸
+        resized = cv2.resize(image_rgb, (self.input_width, self.input_height))
+        
+        # 归一化到0-1
+        normalized = resized.astype(np.float32) / 255.0
+        
+        # 转换为NCHW格式 (batch_size, channels, height, width)
+        transposed = np.transpose(normalized, (2, 0, 1))
+        
+        # 添加batch维度
+        batched = np.expand_dims(transposed, axis=0)
+        
+        return batched
+    
+    def postprocess_onnx_output(self, outputs, original_shape, confidence_threshold: float = 0.5):
+        """
+        后处理ONNX模型输出
+        :param outputs: ONNX模型输出
+        :param original_shape: 原始图像尺寸 (height, width)
+        :param confidence_threshold: 置信度阈值
+        :return: 检测结果列表
+        """
+        # 获取输出（假设输出格式为 [batch, num_detections, 6] 其中6为 [x1, y1, x2, y2, confidence, class_id]）
+        predictions = outputs[0][0]  # 移除batch维度
+        
+        detection_data = []
+        
+        # 计算缩放比例
+        scale_x = original_shape[1] / self.input_width
+        scale_y = original_shape[0] / self.input_height
+        
+        for detection in predictions:
+            if len(detection) >= 6:
+                x1, y1, x2, y2, confidence, class_id = detection[:6]
+                
+                if confidence >= confidence_threshold:
+                    # 将坐标缩放回原始图像尺寸
+                    x1 = float(x1 * scale_x)
+                    y1 = float(y1 * scale_y)
+                    x2 = float(x2 * scale_x)
+                    y2 = float(y2 * scale_y)
+                    
+                    # 计算中心点
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    
+                    # 获取类别名称
+                    class_name = self.class_names.get(int(class_id), f"class_{int(class_id)}")
+                    
+                    detection_info = {
+                        'bbox': [x1, y1, x2, y2],
+                        'center_x': center_x,
+                        'center_y': center_y,
+                        'confidence': float(confidence),
+                        'class_id': int(class_id),
+                        'class_name': class_name,
+                        'template': f"{class_name}.png"  # 为了兼容原有的input_key_sequence方法
+                    }
+                    detection_data.append(detection_info)
+        
+        # 按x轴坐标排序
+        detection_data_sorted = sorted(detection_data, key=lambda x: x['center_x'])
+        
+        return detection_data_sorted
+    
+    def detect_keys_with_onnx(self, image: np.ndarray, confidence_threshold: float = 0.5) -> List[Dict]:
+        """
+        使用ONNX模型检测按键
+        :param image: 输入图像
+        :param confidence_threshold: 置信度阈值
+        :return: 检测结果列表
+        """
+        if self.onnx_session is None:
+            print("ONNX模型未加载，无法进行按键检测")
+            return []
+        
+        try:
+            # 预处理图像
+            preprocessed = self.preprocess_image_for_onnx(image)
+            
+            # 运行推理
+            outputs = self.onnx_session.run(self.output_names, {self.input_name: preprocessed})
+            
+            # 后处理输出
+            detection_data = self.postprocess_onnx_output(outputs, image.shape[:2], confidence_threshold)
+            
+            print(f"ONNX检测到 {len(detection_data)} 个按键目标")
+            for detection in detection_data:
+                print(f"  - {detection['class_name']}: 置信度 {detection['confidence']:.3f}, 位置 ({detection['center_x']:.1f}, {detection['center_y']:.1f})")
+            
+            return detection_data
+            
+        except Exception as e:
+            print(f"ONNX按键检测失败: {e}")
+            return []
 
 if __name__ == "__main__":
     main()
