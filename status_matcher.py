@@ -527,9 +527,9 @@ class StatusMatcher:
                                     continue
                             
                             elif detected_status == "start":
-                                print("检测到start状态，按下空格键开始游戏")
+                                print("检测到start状态，按下空格键开始钓鱼")
                                 if self.press_space_key():
-                                    print("等待10秒开始游戏...")
+                                    print("等待10秒开始钓鱼...")
                                     time.sleep(10)
                             
                             elif detected_status == "waiting":
